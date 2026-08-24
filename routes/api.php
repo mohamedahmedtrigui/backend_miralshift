@@ -11,7 +11,9 @@ use App\Http\Controllers\ZoneController;
 use App\Http\Controllers\ShiftController;
 use App\Http\Controllers\CalendarController;
 
-Route::post('/login', [AuthController::class, 'login']);
+// 5 attempts/minute per IP — cheap brute-force guard on the one endpoint
+// that's reachable without a token.
+Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:5,1');
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);

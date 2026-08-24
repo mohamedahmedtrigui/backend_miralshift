@@ -15,9 +15,12 @@ class CompanyController extends Controller
 
     public function store(Request $request)
     {
+        // 'logo' is either an uploaded image file or a 2-letter initials
+        // string — validate against whichever was actually sent, since the
+        // `file`/`image` rules reject a plain string outright.
         $validated = $request->validate([
             'name' => 'required|string|max:191',
-            'logo' => 'nullable|file|image|max:2048', // Allow file upload or string for initials
+            'logo' => $request->hasFile('logo') ? 'nullable|file|image|max:2048' : 'nullable|string|max:191',
             'color' => 'nullable|string|max:7',
             'description' => 'nullable|string',
         ]);
@@ -52,7 +55,7 @@ class CompanyController extends Controller
     {
         $request->validate([
             'name' => 'sometimes|string|max:191',
-            'logo' => 'nullable', // can be file or string
+            'logo' => $request->hasFile('logo') ? 'nullable|file|image|max:2048' : 'nullable|string|max:191',
             'color' => 'nullable|string|max:7',
             'description' => 'nullable|string',
         ]);
