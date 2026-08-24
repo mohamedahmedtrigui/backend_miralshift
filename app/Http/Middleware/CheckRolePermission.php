@@ -16,6 +16,7 @@ class CheckRolePermission
         'users' => 'users',
         'roles' => 'roles',
         'companies' => 'companies',
+        'shifts' => 'shifts',
     ];
 
     /**
@@ -33,6 +34,7 @@ class CheckRolePermission
         'users' => 'les employés',
         'roles' => 'les rôles',
         'companies' => 'les compagnies',
+        'shifts' => 'les shifts',
     ];
 
     protected array $actionLabels = [

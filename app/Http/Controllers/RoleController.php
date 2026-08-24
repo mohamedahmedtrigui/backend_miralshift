@@ -28,8 +28,15 @@ class RoleController extends Controller
             'access_level' => 'required|in:none,full,restricted',
             'allowed_zones' => 'nullable|array',
             'allowed_companies' => 'nullable|array',
+            'allowed_agencies' => 'nullable|array',
+            'interface_access' => 'nullable|array',
             'permissions' => 'nullable|array',
         ]);
+
+        $actingRole = $request->user()?->role;
+        if ($actingRole?->access_level !== 'full' && $validated['access_level'] === 'full') {
+            abort(403, 'Vous ne pouvez pas créer un rôle à accès complet.');
+        }
 
         $role = Role::create($validated);
         return response()->json($role, 201);
@@ -48,8 +55,26 @@ class RoleController extends Controller
             'access_level' => 'sometimes|in:none,full,restricted',
             'allowed_zones' => 'nullable|array',
             'allowed_companies' => 'nullable|array',
+            'allowed_agencies' => 'nullable|array',
+            'interface_access' => 'nullable|array',
             'permissions' => 'nullable|array',
         ]);
+
+        $actingUser = $request->user();
+        $actingRole = $actingUser?->role;
+
+        // A restricted role editing its own role row (or granting anyone
+        // full access) is the direct path to self-escalation — a
+        // `permissions.roles: [update]` grant is meant for managing OTHER
+        // roles, not widening one's own scope/permissions/access_level.
+        if ($actingRole && $actingRole->access_level !== 'full') {
+            if ($actingUser->role_id === $role->id) {
+                abort(403, 'Vous ne pouvez pas modifier votre propre rôle.');
+            }
+            if (($validated['access_level'] ?? $role->access_level) === 'full') {
+                abort(403, 'Vous ne pouvez pas accorder un accès complet.');
+            }
+        }
 
         $role->update($validated);
         return response()->json($role);

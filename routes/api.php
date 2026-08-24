@@ -8,6 +8,7 @@ use App\Http\Controllers\RoleController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\AgencyController;
 use App\Http\Controllers\ZoneController;
+use App\Http\Controllers\ShiftController;
 use App\Http\Controllers\CalendarController;
 
 Route::post('/login', [AuthController::class, 'login']);
@@ -22,6 +23,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::apiResource('companies', CompanyController::class);
         Route::apiResource('roles', RoleController::class);
         Route::apiResource('users', UserController::class);
+        Route::apiResource('shifts', ShiftController::class);
     });
     Route::apiResource('agencies', AgencyController::class);
     Route::apiResource('zones', ZoneController::class);

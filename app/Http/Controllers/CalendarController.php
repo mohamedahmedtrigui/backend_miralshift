@@ -12,19 +12,23 @@ class CalendarController extends Controller
      */
     public function index(Request $request)
     {
+        $role = $request->user()?->role;
+        if (!$role || !$role->canAccessInterface('calendar')) {
+            abort(403, 'Votre rôle n\'a pas accès au calendrier.');
+        }
+
         // For v1, return all users with their company and role.
         // The frontend will filter them by day_off and shift times.
         // If we want the backend to format it per day:
         // Since the day_off is fixed, we just return the users list.
         // Super Admins are system/admin accounts, not dispatchers with real
         // shifts — exclude them from the schedule.
-        $query = User::with('company', 'role', 'agency')
+        $query = User::with('company', 'role', 'agency', 'shift')
             ->whereDoesntHave('role', fn ($q) => $q->where('access_level', 'full'));
 
         // A "restricted" role only sees the schedule for its allowed
         // companies/zones — same scope as the Employees list.
-        $role = $request->user()?->role;
-        if ($role && $role->access_level === 'restricted') {
+        if ($role->access_level === 'restricted') {
             if (!empty($role->allowed_companies)) {
                 $query->whereIn('company_id', $role->allowed_companies);
             }

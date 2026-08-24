@@ -5,6 +5,8 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use App\Models\User;
+use App\Models\Role;
+use App\Models\Shift;
 
 class UserController extends Controller
 {
@@ -12,7 +14,7 @@ class UserController extends Controller
     {
         // Super Admin accounts are hidden from the employee list — they're
         // system/admin accounts, not staff to schedule or manage here.
-        $query = User::with(['company', 'role', 'agency'])
+        $query = User::with(['company', 'role', 'agency', 'shift'])
             ->whereDoesntHave('role', fn ($q) => $q->where('access_level', 'full'));
 
         $this->applyScope($query, $request->user()?->role);
@@ -69,6 +71,41 @@ class UserController extends Controller
         return true;
     }
 
+    /**
+     * Only a full-access actor may grant another user a full-access role —
+     * otherwise a restricted role with `users.update` permission on itself
+     * could hand itself (or anyone else) Super Admin by setting role_id.
+     */
+    private function assertRoleAssignmentAllowed(?Role $actingRole, ?int $newRoleId): void
+    {
+        if ($newRoleId === null || $actingRole?->access_level === 'full') {
+            return;
+        }
+
+        $targetRole = Role::find($newRoleId);
+        if ($targetRole && $targetRole->access_level === 'full') {
+            abort(403, 'Vous ne pouvez pas assigner un rôle à accès complet.');
+        }
+    }
+
+    /**
+     * A shift belongs to one company + one agency — reject assigning a shift
+     * that doesn't match the company/agency actually being set on this user,
+     * so the calendar never shows a shift's time/color against an unrelated
+     * company's employee.
+     */
+    private function assertShiftMatchesAssignment(?int $shiftId, $companyId, $agencyId): void
+    {
+        if ($shiftId === null) {
+            return;
+        }
+
+        $shift = Shift::find($shiftId);
+        if ($shift && ((string) $shift->company_id !== (string) $companyId || (string) $shift->agency_id !== (string) $agencyId)) {
+            abort(422, 'Le shift sélectionné n\'appartient pas à la compagnie/agence de cet employé.');
+        }
+    }
+
     public function store(Request $request)
     {
         $validated = $request->validate([
@@ -79,8 +116,7 @@ class UserController extends Controller
             'dispatch_zones' => 'nullable|array',
             'dispatch_zones.*' => 'string|max:191',
             'day_off' => 'nullable|string|max:191',
-            'shift_start' => 'nullable|date_format:H:i',
-            'shift_end' => 'nullable|date_format:H:i',
+            'shift_id' => 'nullable|exists:shifts,id',
             'start_date' => 'nullable|date',
             'company_id' => 'nullable|exists:companies,id',
             'role_id' => 'nullable|exists:roles,id',
@@ -98,13 +134,15 @@ class UserController extends Controller
                 abort(403, 'Vous ne pouvez pas assigner des zones de dispatch en dehors de vos zones autorisées.');
             }
         }
+        $this->assertRoleAssignmentAllowed($actingRole, $validated['role_id'] ?? null);
+        $this->assertShiftMatchesAssignment($validated['shift_id'] ?? null, $validated['company_id'] ?? null, $validated['agency_id'] ?? null);
 
         if (!empty($validated['password'])) {
             $validated['password'] = Hash::make($validated['password']);
         }
 
         $user = User::create($validated);
-        return response()->json($user->load(['company', 'role', 'agency']), 201);
+        return response()->json($user->load(['company', 'role', 'agency', 'shift']), 201);
     }
 
     public function show(Request $request, User $user)
@@ -113,7 +151,7 @@ class UserController extends Controller
             abort(403, 'Cet employé est en dehors des compagnies/zones autorisées pour votre rôle.');
         }
 
-        return response()->json($user->load(['company', 'role', 'agency']));
+        return response()->json($user->load(['company', 'role', 'agency', 'shift']));
     }
 
     public function update(Request $request, User $user)
@@ -130,8 +168,7 @@ class UserController extends Controller
             'dispatch_zones' => 'nullable|array',
             'dispatch_zones.*' => 'string|max:191',
             'day_off' => 'nullable|string|max:191',
-            'shift_start' => 'nullable|date_format:H:i',
-            'shift_end' => 'nullable|date_format:H:i',
+            'shift_id' => 'nullable|exists:shifts,id',
             'start_date' => 'nullable|date',
             'company_id' => 'nullable|exists:companies,id',
             'role_id' => 'nullable|exists:roles,id',
@@ -150,6 +187,14 @@ class UserController extends Controller
                 abort(403, 'Vous ne pouvez pas assigner des zones de dispatch en dehors de vos zones autorisées.');
             }
         }
+        if (array_key_exists('role_id', $validated)) {
+            $this->assertRoleAssignmentAllowed($actingRole, $validated['role_id']);
+        }
+        if (array_key_exists('shift_id', $validated)) {
+            $finalCompanyId = array_key_exists('company_id', $validated) ? $validated['company_id'] : $user->company_id;
+            $finalAgencyId = array_key_exists('agency_id', $validated) ? $validated['agency_id'] : $user->agency_id;
+            $this->assertShiftMatchesAssignment($validated['shift_id'], $finalCompanyId, $finalAgencyId);
+        }
 
         if (!empty($validated['password'])) {
             $validated['password'] = Hash::make($validated['password']);
@@ -158,7 +203,7 @@ class UserController extends Controller
         }
 
         $user->update($validated);
-        return response()->json($user->load(['company', 'role', 'agency']));
+        return response()->json($user->load(['company', 'role', 'agency', 'shift']));
     }
 
     public function destroy(Request $request, User $user)
