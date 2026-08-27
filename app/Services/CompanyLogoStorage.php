@@ -51,7 +51,13 @@ class CompanyLogoStorage
             return;
         }
 
-        if (str_contains($logo, 'logos/')) {
+        // A bare relative path only resolves through the local/S3 Storage
+        // disk it was actually uploaded to. If uploads now go through
+        // Cloudinary instead, this is a stale reference from before the
+        // switch — 'cloudinary' isn't a registered Storage disk, and the
+        // file itself is long gone anyway (Render's container disk doesn't
+        // survive a deploy). Nothing to delete.
+        if (str_contains($logo, 'logos/') && config('filesystems.uploads_disk') !== 'cloudinary') {
             Storage::disk(config('filesystems.uploads_disk'))->delete($logo);
         }
     }
@@ -64,6 +70,12 @@ class CompanyLogoStorage
 
         if (str_starts_with($logo, 'http://') || str_starts_with($logo, 'https://')) {
             return $logo;
+        }
+
+        // Same stale-reference case as delete() above: a relative path
+        // can't be served through Cloudinary, which isn't a Storage disk.
+        if (config('filesystems.uploads_disk') === 'cloudinary') {
+            return null;
         }
 
         return Storage::disk(config('filesystems.uploads_disk'))->url($logo);
