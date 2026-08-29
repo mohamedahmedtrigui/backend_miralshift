@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use App\Models\Company;
 use App\Models\User;
 
 class AuthController extends Controller
@@ -27,7 +28,12 @@ class AuthController extends Controller
 
         $token = $user->createToken('auth_token')->plainTextToken;
 
-        $user->load('role', 'company');
+        $user->load('role');
+        $companiesById = Company::all()->keyBy('id');
+        $user->companies = collect($user->company_ids ?? [])
+            ->map(fn ($id) => $companiesById->get((int) $id))
+            ->filter()
+            ->values();
 
         return response()->json([
             'access_token' => $token,
