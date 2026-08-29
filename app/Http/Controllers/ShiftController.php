@@ -10,11 +10,40 @@ class ShiftController extends Controller
 {
     public function index(Request $request)
     {
-        $query = Shift::with(['company', 'agency'])->withCount('users')->orderBy('name');
+        $query = Shift::with(['agency'])->withCount('users')->orderBy('name');
 
         $this->applyScope($query, $request->user()?->role);
 
-        return response()->json($query->get());
+        return response()->json($this->attachCompanies($query->get()));
+    }
+
+    /**
+     * shifts.company_ids is a JSON array now, not a single FK, so it can't
+     * be eager-loaded via with('company') — resolve it once against all
+     * companies (avoids an N+1 lookup per row) and attach it as a plain
+     * `companies` list on each shift.
+     */
+    private function attachCompanies($shifts)
+    {
+        $companiesById = \App\Models\Company::all()->keyBy('id');
+        $shifts->each(fn ($shift) => $shift->companies = $this->resolveCompanies($shift->company_ids ?? [], $companiesById));
+
+        return $shifts;
+    }
+
+    private function attachCompaniesToOne(Shift $shift)
+    {
+        $shift->companies = $this->resolveCompanies($shift->company_ids ?? [], \App\Models\Company::all()->keyBy('id'));
+
+        return $shift;
+    }
+
+    private function resolveCompanies(array $companyIds, $companiesById)
+    {
+        return collect($companyIds)
+            ->map(fn ($id) => $companiesById->get((int) $id))
+            ->filter()
+            ->values();
     }
 
     /**
@@ -28,7 +57,11 @@ class ShiftController extends Controller
         }
 
         if (!empty($role->allowed_companies)) {
-            $query->whereIn('company_id', $role->allowed_companies);
+            $query->where(function ($q) use ($role) {
+                foreach ($role->allowed_companies as $companyId) {
+                    $q->orWhereJsonContains('company_ids', (string) $companyId);
+                }
+            });
         }
 
         if (!empty($role->allowed_agencies)) {
@@ -42,14 +75,15 @@ class ShiftController extends Controller
             return true;
         }
 
-        return $role->allowsCompany($shift->company_id) && $role->allowsAgency($shift->agency_id);
+        return $role->allowsAnyCompany($shift->company_ids ?? []) && $role->allowsAgency($shift->agency_id);
     }
 
     public function store(Request $request)
     {
         $validated = $request->validate([
             'name' => 'required|string|max:191',
-            'company_id' => 'required|exists:companies,id',
+            'company_ids' => 'required|array|min:1',
+            'company_ids.*' => 'exists:companies,id',
             'agency_id' => 'required|exists:agencies,id',
             'start_time' => 'required|date_format:H:i',
             'end_time' => 'required|date_format:H:i',
@@ -58,13 +92,13 @@ class ShiftController extends Controller
 
         $actingRole = $request->user()?->role;
         if ($actingRole && $actingRole->access_level === 'restricted') {
-            if (!$actingRole->allowsCompany($validated['company_id']) || !$actingRole->allowsAgency($validated['agency_id'])) {
+            if (!$actingRole->allowsAllCompanies($validated['company_ids']) || !$actingRole->allowsAgency($validated['agency_id'])) {
                 abort(403, 'Vous ne pouvez pas créer un shift en dehors de vos compagnies/agences autorisées.');
             }
         }
 
         $shift = Shift::create($validated);
-        return response()->json($shift->load(['company', 'agency']), 201);
+        return response()->json($this->attachCompaniesToOne($shift->load(['agency'])), 201);
     }
 
     public function show(Request $request, Shift $shift)
@@ -73,7 +107,7 @@ class ShiftController extends Controller
             abort(403, 'Ce shift est en dehors des compagnies/agences autorisées pour votre rôle.');
         }
 
-        return response()->json($shift->load(['company', 'agency']));
+        return response()->json($this->attachCompaniesToOne($shift->load(['agency'])));
     }
 
     public function update(Request $request, Shift $shift)
@@ -84,7 +118,8 @@ class ShiftController extends Controller
 
         $validated = $request->validate([
             'name' => 'sometimes|string|max:191',
-            'company_id' => 'sometimes|exists:companies,id',
+            'company_ids' => 'sometimes|array|min:1',
+            'company_ids.*' => 'exists:companies,id',
             'agency_id' => 'sometimes|exists:agencies,id',
             'start_time' => 'sometimes|date_format:H:i',
             'end_time' => 'sometimes|date_format:H:i',
@@ -93,15 +128,15 @@ class ShiftController extends Controller
 
         $actingRole = $request->user()?->role;
         if ($actingRole && $actingRole->access_level === 'restricted') {
-            $newCompanyId = $validated['company_id'] ?? $shift->company_id;
+            $newCompanyIds = $validated['company_ids'] ?? ($shift->company_ids ?? []);
             $newAgencyId = $validated['agency_id'] ?? $shift->agency_id;
-            if (!$actingRole->allowsCompany($newCompanyId) || !$actingRole->allowsAgency($newAgencyId)) {
+            if (!$actingRole->allowsAllCompanies($newCompanyIds) || !$actingRole->allowsAgency($newAgencyId)) {
                 abort(403, 'Vous ne pouvez pas déplacer ce shift vers une compagnie/agence en dehors de vos autorisations.');
             }
         }
 
         $shift->update($validated);
-        return response()->json($shift->load(['company', 'agency']));
+        return response()->json($this->attachCompaniesToOne($shift->load(['agency'])));
     }
 
     public function destroy(Request $request, Shift $shift)

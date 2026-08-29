@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Models\Company;
+use App\Models\User;
 use App\Services\CompanyLogoStorage;
 
 class CompanyController extends Controller
@@ -14,7 +15,14 @@ class CompanyController extends Controller
 
     public function index()
     {
-        return response()->json(Company::withCount('users')->get());
+        // Company::users() is a JSON-array lookup now, not a real relation,
+        // so it can't be counted via withCount() — compute it per row.
+        $companies = Company::all();
+        $companies->each(function ($company) {
+            $company->users_count = User::whereJsonContains('company_ids', (string) $company->id)->count();
+        });
+
+        return response()->json($companies);
     }
 
     public function store(Request $request)

@@ -21,8 +21,13 @@ class Company extends Model
         return app(CompanyLogoStorage::class)->url($this->logo);
     }
 
+    // Not a real Eloquent relation — an employee's companies are now a JSON
+    // array (users.company_ids), not a single FK. Returns a plain query
+    // builder so `$company->users()->exists()` still works as a delete
+    // guard; `withCount('users')` no longer works since this isn't a
+    // Relation instance (see CompanyController@index).
     public function users()
     {
-        return $this->hasMany(User::class);
+        return User::whereJsonContains('company_ids', (string) $this->id);
     }
 }

@@ -14,12 +14,41 @@ class UserController extends Controller
     {
         // Super Admin accounts are hidden from the employee list — they're
         // system/admin accounts, not staff to schedule or manage here.
-        $query = User::with(['company', 'role', 'agency', 'shift'])
+        $query = User::with(['role', 'agency', 'shift'])
             ->whereDoesntHave('role', fn ($q) => $q->where('access_level', 'full'));
 
         $this->applyScope($query, $request->user()?->role);
 
-        return response()->json($query->get());
+        return response()->json($this->attachCompanies($query->get()));
+    }
+
+    /**
+     * users.company_ids is a JSON array now, not a single FK, so it can't be
+     * eager-loaded via with('company') — resolve it once against all
+     * companies (avoids an N+1 lookup per row) and attach it as a plain
+     * `companies` list on each user.
+     */
+    private function attachCompanies($users)
+    {
+        $companiesById = \App\Models\Company::all()->keyBy('id');
+        $users->each(fn ($user) => $user->companies = $this->resolveCompanies($user->company_ids ?? [], $companiesById));
+
+        return $users;
+    }
+
+    private function attachCompaniesToOne(User $user)
+    {
+        $user->companies = $this->resolveCompanies($user->company_ids ?? [], \App\Models\Company::all()->keyBy('id'));
+
+        return $user;
+    }
+
+    private function resolveCompanies(array $companyIds, $companiesById)
+    {
+        return collect($companyIds)
+            ->map(fn ($id) => $companiesById->get((int) $id))
+            ->filter()
+            ->values();
     }
 
     /**
@@ -34,7 +63,11 @@ class UserController extends Controller
         }
 
         if (!empty($role->allowed_companies)) {
-            $query->whereIn('company_id', $role->allowed_companies);
+            $query->where(function ($q) use ($role) {
+                foreach ($role->allowed_companies as $companyId) {
+                    $q->orWhereJsonContains('company_ids', (string) $companyId);
+                }
+            });
         }
 
         if (!empty($role->allowed_zones)) {
@@ -57,7 +90,7 @@ class UserController extends Controller
             return true;
         }
 
-        if (!$role->allowsCompany($user->company_id)) {
+        if (!$role->allowsAnyCompany($user->company_ids ?? [])) {
             return false;
         }
 
@@ -89,19 +122,27 @@ class UserController extends Controller
     }
 
     /**
-     * A shift belongs to one company + one agency — reject assigning a shift
-     * that doesn't match the company/agency actually being set on this user,
-     * so the calendar never shows a shift's time/color against an unrelated
-     * company's employee.
+     * A shift can belong to several companies but always exactly one
+     * agency — reject assigning a shift that doesn't share at least one
+     * company with this user and match its agency exactly, so the calendar
+     * never shows a shift's time/color against an unrelated employee.
      */
-    private function assertShiftMatchesAssignment(?int $shiftId, $companyId, $agencyId): void
+    private function assertShiftMatchesAssignment(?int $shiftId, array $companyIds, $agencyId): void
     {
         if ($shiftId === null) {
             return;
         }
 
         $shift = Shift::find($shiftId);
-        if ($shift && ((string) $shift->company_id !== (string) $companyId || (string) $shift->agency_id !== (string) $agencyId)) {
+        if (!$shift) {
+            return;
+        }
+
+        $sharesCompany = !empty(array_intersect(
+            array_map('strval', $shift->company_ids ?? []),
+            array_map('strval', $companyIds)
+        ));
+        if (!$sharesCompany || (string) $shift->agency_id !== (string) $agencyId) {
             abort(422, 'Le shift sélectionné n\'appartient pas à la compagnie/agence de cet employé.');
         }
     }
@@ -118,7 +159,8 @@ class UserController extends Controller
             'day_off' => 'nullable|string|max:191',
             'shift_id' => 'nullable|exists:shifts,id',
             'start_date' => 'nullable|date',
-            'company_id' => 'nullable|exists:companies,id',
+            'company_ids' => 'nullable|array',
+            'company_ids.*' => 'exists:companies,id',
             'role_id' => 'nullable|exists:roles,id',
             'username' => 'nullable|string|max:191|unique:users',
             'password' => 'nullable|string|min:6',
@@ -126,7 +168,7 @@ class UserController extends Controller
 
         $actingRole = $request->user()?->role;
         if ($actingRole && $actingRole->access_level === 'restricted') {
-            if (!$actingRole->allowsCompany($validated['company_id'] ?? null)) {
+            if (!$actingRole->allowsAllCompanies($validated['company_ids'] ?? [])) {
                 abort(403, 'Vous ne pouvez pas assigner un employé à une compagnie en dehors de vos compagnies autorisées.');
             }
             $zones = $validated['dispatch_zones'] ?? [];
@@ -135,14 +177,14 @@ class UserController extends Controller
             }
         }
         $this->assertRoleAssignmentAllowed($actingRole, $validated['role_id'] ?? null);
-        $this->assertShiftMatchesAssignment($validated['shift_id'] ?? null, $validated['company_id'] ?? null, $validated['agency_id'] ?? null);
+        $this->assertShiftMatchesAssignment($validated['shift_id'] ?? null, $validated['company_ids'] ?? [], $validated['agency_id'] ?? null);
 
         if (!empty($validated['password'])) {
             $validated['password'] = Hash::make($validated['password']);
         }
 
         $user = User::create($validated);
-        return response()->json($user->load(['company', 'role', 'agency', 'shift']), 201);
+        return response()->json($this->attachCompaniesToOne($user->load(['role', 'agency', 'shift'])), 201);
     }
 
     public function show(Request $request, User $user)
@@ -151,7 +193,7 @@ class UserController extends Controller
             abort(403, 'Cet employé est en dehors des compagnies/zones autorisées pour votre rôle.');
         }
 
-        return response()->json($user->load(['company', 'role', 'agency', 'shift']));
+        return response()->json($this->attachCompaniesToOne($user->load(['role', 'agency', 'shift'])));
     }
 
     public function update(Request $request, User $user)
@@ -170,7 +212,8 @@ class UserController extends Controller
             'day_off' => 'nullable|string|max:191',
             'shift_id' => 'nullable|exists:shifts,id',
             'start_date' => 'nullable|date',
-            'company_id' => 'nullable|exists:companies,id',
+            'company_ids' => 'nullable|array',
+            'company_ids.*' => 'exists:companies,id',
             'role_id' => 'nullable|exists:roles,id',
             'username' => 'nullable|string|max:191|unique:users,username,'.$user->id,
             'password' => 'nullable|string|min:6',
@@ -178,8 +221,8 @@ class UserController extends Controller
 
         $actingRole = $request->user()?->role;
         if ($actingRole && $actingRole->access_level === 'restricted') {
-            $newCompanyId = array_key_exists('company_id', $validated) ? $validated['company_id'] : $user->company_id;
-            if (!$actingRole->allowsCompany($newCompanyId)) {
+            $newCompanyIds = array_key_exists('company_ids', $validated) ? $validated['company_ids'] : ($user->company_ids ?? []);
+            if (!$actingRole->allowsAllCompanies($newCompanyIds)) {
                 abort(403, 'Vous ne pouvez pas déplacer un employé vers une compagnie en dehors de vos compagnies autorisées.');
             }
             $newZones = array_key_exists('dispatch_zones', $validated) ? $validated['dispatch_zones'] : ($user->dispatch_zones ?? []);
@@ -191,9 +234,9 @@ class UserController extends Controller
             $this->assertRoleAssignmentAllowed($actingRole, $validated['role_id']);
         }
         if (array_key_exists('shift_id', $validated)) {
-            $finalCompanyId = array_key_exists('company_id', $validated) ? $validated['company_id'] : $user->company_id;
+            $finalCompanyIds = array_key_exists('company_ids', $validated) ? $validated['company_ids'] : ($user->company_ids ?? []);
             $finalAgencyId = array_key_exists('agency_id', $validated) ? $validated['agency_id'] : $user->agency_id;
-            $this->assertShiftMatchesAssignment($validated['shift_id'], $finalCompanyId, $finalAgencyId);
+            $this->assertShiftMatchesAssignment($validated['shift_id'], $finalCompanyIds, $finalAgencyId);
         }
 
         if (!empty($validated['password'])) {
@@ -203,7 +246,7 @@ class UserController extends Controller
         }
 
         $user->update($validated);
-        return response()->json($user->load(['company', 'role', 'agency', 'shift']));
+        return response()->json($this->attachCompaniesToOne($user->load(['role', 'agency', 'shift'])));
     }
 
     public function destroy(Request $request, User $user)

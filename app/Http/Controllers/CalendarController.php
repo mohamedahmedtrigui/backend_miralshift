@@ -23,14 +23,18 @@ class CalendarController extends Controller
         // Since the day_off is fixed, we just return the users list.
         // Super Admins are system/admin accounts, not dispatchers with real
         // shifts — exclude them from the schedule.
-        $query = User::with('company', 'role', 'agency', 'shift')
+        $query = User::with('role', 'agency', 'shift')
             ->whereDoesntHave('role', fn ($q) => $q->where('access_level', 'full'));
 
         // A "restricted" role only sees the schedule for its allowed
         // companies/zones — same scope as the Employees list.
         if ($role->access_level === 'restricted') {
             if (!empty($role->allowed_companies)) {
-                $query->whereIn('company_id', $role->allowed_companies);
+                $query->where(function ($q) use ($role) {
+                    foreach ($role->allowed_companies as $companyId) {
+                        $q->orWhereJsonContains('company_ids', (string) $companyId);
+                    }
+                });
             }
             if (!empty($role->allowed_zones)) {
                 $query->where(function ($q) use ($role) {
@@ -41,7 +45,16 @@ class CalendarController extends Controller
             }
         }
 
-        return response()->json($query->get());
+        $users = $query->get();
+        $companiesById = \App\Models\Company::all()->keyBy('id');
+        $users->each(function ($user) use ($companiesById) {
+            $user->companies = collect($user->company_ids ?? [])
+                ->map(fn ($id) => $companiesById->get((int) $id))
+                ->filter()
+                ->values();
+        });
+
+        return response()->json($users);
     }
 
     /**
