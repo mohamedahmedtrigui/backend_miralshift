@@ -13,9 +13,13 @@ class UserController extends Controller
     public function index(Request $request)
     {
         // Super Admin accounts are hidden from the employee list — they're
-        // system/admin accounts, not staff to schedule or manage here.
+        // system/admin accounts, not staff to schedule or manage here. The
+        // acting user's own row is hidden too — otherwise they could edit
+        // their own company/role/shift from this screen, the same
+        // self-escalation path already blocked on the Roles screen.
         $query = User::with(['role', 'agency', 'shift'])
-            ->whereDoesntHave('role', fn ($q) => $q->where('access_level', 'full'));
+            ->whereDoesntHave('role', fn ($q) => $q->where('access_level', 'full'))
+            ->where('id', '!=', $request->user()?->id);
 
         $this->applyScope($query, $request->user()?->role);
 
@@ -202,6 +206,13 @@ class UserController extends Controller
             abort(403, 'Cet employé est en dehors des compagnies/zones autorisées pour votre rôle.');
         }
 
+        // A restricted role editing its own employee row is the same
+        // self-escalation path already blocked on the Roles screen — it
+        // could hand itself a different company/role/shift.
+        if ($request->user()?->id === $user->id && $request->user()?->role?->access_level !== 'full') {
+            abort(403, 'Vous ne pouvez pas modifier votre propre compte.');
+        }
+
         $validated = $request->validate([
             'first_name' => 'sometimes|string|max:191',
             'last_name' => 'sometimes|string|max:191',
@@ -253,6 +264,10 @@ class UserController extends Controller
     {
         if (!$this->inScope($user, $request->user()?->role)) {
             abort(403, 'Cet employé est en dehors des compagnies/zones autorisées pour votre rôle.');
+        }
+
+        if ($request->user()?->id === $user->id) {
+            abort(403, 'Vous ne pouvez pas supprimer votre propre compte.');
         }
 
         $user->delete();
