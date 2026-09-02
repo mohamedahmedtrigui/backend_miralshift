@@ -19,7 +19,13 @@ return [
 
     'allowed_methods' => ['*'],
 
-    'allowed_origins' => ['*'],
+    // Defaults to '*' so it works with the Vercel frontend out of the box;
+    // set FRONTEND_URL (or a comma-separated CORS_ALLOWED_ORIGINS) once the
+    // Vercel domain is known, to stop accepting requests from anywhere else.
+    'allowed_origins' => array_filter(array_map('trim', explode(
+        ',',
+        env('CORS_ALLOWED_ORIGINS', env('FRONTEND_URL', '*'))
+    ))),
 
     'allowed_origins_patterns' => [],
 

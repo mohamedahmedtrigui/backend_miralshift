@@ -4,13 +4,25 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Models\Company;
-use Illuminate\Support\Facades\Storage;
+use App\Models\User;
+use App\Services\CompanyLogoStorage;
 
 class CompanyController extends Controller
 {
+    public function __construct(private CompanyLogoStorage $logoStorage)
+    {
+    }
+
     public function index()
     {
-        return response()->json(Company::withCount('users')->get());
+        // Company::users() is a JSON-array lookup now, not a real relation,
+        // so it can't be counted via withCount() — compute it per row.
+        $companies = Company::all();
+        $companies->each(function ($company) {
+            $company->users_count = User::whereJsonContains('company_ids', (string) $company->id)->count();
+        });
+
+        return response()->json($companies);
     }
 
     public function store(Request $request)
@@ -28,26 +40,18 @@ class CompanyController extends Controller
         // To support both initials and file uploads, we can do manual check
         $data = $request->only(['name', 'description', 'color']);
         if ($request->hasFile('logo')) {
-            $data['logo'] = $request->file('logo')->store('logos', 'public');
+            $data['logo'] = $this->logoStorage->store($request->file('logo'));
         } elseif ($request->has('logo') && is_string($request->logo)) {
             $data['logo'] = substr($request->logo, 0, 2);
         }
 
         $company = Company::create($data);
-        
-        // Build public URL for response if it's a file path
-        $company->logo_url = $company->logo && str_contains($company->logo, 'logos/') 
-            ? asset('storage/' . $company->logo) 
-            : null;
 
         return response()->json($company, 201);
     }
 
     public function show(Company $company)
     {
-        $company->logo_url = $company->logo && str_contains($company->logo, 'logos/') 
-            ? asset('storage/' . $company->logo) 
-            : null;
         return response()->json($company);
     }
 
@@ -62,21 +66,14 @@ class CompanyController extends Controller
 
         $data = $request->only(['name', 'description', 'color']);
         if ($request->hasFile('logo')) {
-            // delete old logo
-            if ($company->logo && str_contains($company->logo, 'logos/')) {
-                Storage::disk('public')->delete($company->logo);
-            }
-            $data['logo'] = $request->file('logo')->store('logos', 'public');
+            $this->logoStorage->delete($company->logo);
+            $data['logo'] = $this->logoStorage->store($request->file('logo'));
         } elseif ($request->has('logo') && is_string($request->logo)) {
             $data['logo'] = substr($request->logo, 0, 2);
         }
 
         $company->update($data);
-        
-        $company->logo_url = $company->logo && str_contains($company->logo, 'logos/') 
-            ? asset('storage/' . $company->logo) 
-            : null;
-            
+
         return response()->json($company);
     }
 
@@ -88,9 +85,7 @@ class CompanyController extends Controller
             ], 422);
         }
 
-        if ($company->logo && str_contains($company->logo, 'logos/')) {
-            Storage::disk('public')->delete($company->logo);
-        }
+        $this->logoStorage->delete($company->logo);
         $company->delete();
         return response()->json(null, 204);
     }

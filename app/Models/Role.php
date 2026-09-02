@@ -60,10 +60,13 @@ class Role extends Model
     }
 
     /**
-     * Whether this role can see/act on the given company. An empty
-     * allowed_companies list means "all companies".
+     * Whether this role's scope overlaps at all with the given companies —
+     * used to decide if a record (an employee, a shift) is visible to this
+     * role, e.g. an employee belonging to [A, B] is visible to a role
+     * restricted to [B, C]. An empty allowed_companies list means "all
+     * companies".
      */
-    public function allowsCompany($companyId): bool
+    public function allowsAnyCompany(array $companyIds): bool
     {
         if ($this->access_level === 'full') {
             return true;
@@ -71,11 +74,25 @@ class Role extends Model
         if (empty($this->allowed_companies)) {
             return true;
         }
-        if ($companyId === null) {
-            return false;
+
+        return !empty(array_intersect(array_map('strval', $this->allowed_companies), array_map('strval', $companyIds)));
+    }
+
+    /**
+     * Whether every one of the given companies falls within this role's own
+     * scope — used as a write guard so a restricted role can't assign an
+     * employee/shift to a company outside what it's allowed to touch.
+     */
+    public function allowsAllCompanies(array $companyIds): bool
+    {
+        if ($this->access_level === 'full') {
+            return true;
+        }
+        if (empty($this->allowed_companies)) {
+            return true;
         }
 
-        return in_array((string) $companyId, array_map('strval', $this->allowed_companies), true);
+        return empty(array_diff(array_map('strval', $companyIds), array_map('strval', $this->allowed_companies)));
     }
 
     /**

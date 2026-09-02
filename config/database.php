@@ -101,6 +101,13 @@ return [
             'prefix_indexes' => true,
             'search_path' => 'public',
             'sslmode' => env('DB_SSLMODE', 'prefer'),
+            // Measured worse, not better, under the built-in dev server's
+            // multi-worker mode (see serve.ps1/.sh) — left available behind
+            // an env flag rather than defaulted on. See git history / chat
+            // log for the measurements if revisiting this.
+            'options' => extension_loaded('pdo_pgsql') && env('DB_PERSISTENT', false) ? [
+                PDO::ATTR_PERSISTENT => true,
+            ] : [],
         ],
 
         'sqlsrv' => [

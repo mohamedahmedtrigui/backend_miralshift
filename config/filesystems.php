@@ -17,6 +17,21 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Uploads Disk
+    |--------------------------------------------------------------------------
+    |
+    | Which disk company logo uploads are stored on/served from. Defaults to
+    | the local "public" disk for local dev. Render's container filesystem
+    | is wiped on every deploy/restart, so production sets this to "s3"
+    | (pointed at Cloudflare R2 below) instead — otherwise uploaded logos
+    | vanish the next time the app redeploys.
+    |
+    */
+
+    'uploads_disk' => env('UPLOADS_DISK', 'public'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Filesystem Disks
     |--------------------------------------------------------------------------
     |
@@ -55,7 +70,9 @@ return [
             'bucket' => env('AWS_BUCKET'),
             'url' => env('AWS_URL'),
             'endpoint' => env('AWS_ENDPOINT'),
-            'use_path_style_endpoint' => env('AWS_USE_PATH_STYLE_ENDPOINT', false),
+            // R2 buckets are addressed path-style (endpoint/bucket/key), not
+            // virtual-hosted-style (bucket.endpoint/key) like real S3.
+            'use_path_style_endpoint' => env('AWS_USE_PATH_STYLE_ENDPOINT', true),
             'throw' => false,
             'report' => false,
         ],

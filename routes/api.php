@@ -18,7 +18,14 @@ Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:5,
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/user', function (Request $request) {
-        return $request->user()->load('role', 'company', 'agency');
+        $user = $request->user()->load('role', 'agency');
+        $companiesById = \App\Models\Company::all()->keyBy('id');
+        $user->companies = collect($user->company_ids ?? [])
+            ->map(fn ($id) => $companiesById->get((int) $id))
+            ->filter()
+            ->values();
+
+        return $user;
     });
 
     Route::middleware('role.permission')->group(function () {

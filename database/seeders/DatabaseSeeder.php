@@ -69,7 +69,7 @@ class DatabaseSeeder extends Seeder
 
         $morningShift = Shift::create([
             'name' => 'Matin',
-            'company_id' => $company1->id,
+            'company_ids' => [(string) $company1->id],
             'agency_id' => $tunisAgency->id,
             'start_time' => '08:00:00',
             'end_time' => '17:00:00',
@@ -78,7 +78,7 @@ class DatabaseSeeder extends Seeder
 
         $afternoonShift = Shift::create([
             'name' => 'Après-midi',
-            'company_id' => $company2->id,
+            'company_ids' => [(string) $company2->id],
             'agency_id' => $sousseAgency->id,
             'start_time' => '14:00:00',
             'end_time' => '22:00:00',
@@ -87,7 +87,7 @@ class DatabaseSeeder extends Seeder
 
         $nightShift = Shift::create([
             'name' => 'Nuit',
-            'company_id' => $company1->id,
+            'company_ids' => [(string) $company1->id],
             'agency_id' => $sfaxAgency->id,
             'start_time' => '20:00:00',
             'end_time' => '04:00:00',
@@ -96,7 +96,7 @@ class DatabaseSeeder extends Seeder
 
         $morningArianaShift = Shift::create([
             'name' => 'Matin',
-            'company_id' => $company1->id,
+            'company_ids' => [(string) $company1->id],
             'agency_id' => $arianaAgency->id,
             'start_time' => '09:00:00',
             'end_time' => '17:00:00',
@@ -110,7 +110,7 @@ class DatabaseSeeder extends Seeder
             'username' => 'admin',
             'password' => Hash::make('password'),
             'role_id' => $adminRole->id,
-            'company_id' => $company1->id,
+            'company_ids' => [(string) $company1->id],
             'agency_id' => $tunisAgency->id,
             'dispatch_zones' => ['Tunis'],
             'day_off' => 'Sunday',
@@ -124,7 +124,7 @@ class DatabaseSeeder extends Seeder
             'username' => 'sami',
             'password' => Hash::make('password'),
             'role_id' => $dispatcherRole->id,
-            'company_id' => $company2->id,
+            'company_ids' => [(string) $company2->id],
             'agency_id' => $sousseAgency->id,
             'dispatch_zones' => ['Sousse'],
             'day_off' => 'Monday',
@@ -135,7 +135,7 @@ class DatabaseSeeder extends Seeder
         User::create([
             'first_name' => 'Fatma',
             'last_name' => 'Karray',
-            'company_id' => $company1->id,
+            'company_ids' => [(string) $company1->id],
             'agency_id' => $sfaxAgency->id,
             'dispatch_zones' => ['Sfax', 'Tunis'],
             'day_off' => 'Wednesday',
@@ -146,7 +146,7 @@ class DatabaseSeeder extends Seeder
         User::create([
             'first_name' => 'Youssef',
             'last_name' => 'Gharbi',
-            'company_id' => $company1->id,
+            'company_ids' => [(string) $company1->id],
             'agency_id' => $arianaAgency->id,
             'dispatch_zones' => ['Ariana'],
             'day_off' => 'Sunday',
