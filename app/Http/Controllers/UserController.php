@@ -17,11 +17,11 @@ class UserController extends Controller
         // acting user's own row is hidden too — otherwise they could edit
         // their own company/role/shift from this screen, the same
         // self-escalation path already blocked on the Roles screen.
-        $query = User::with(['role', 'agency', 'shift'])
-            ->whereDoesntHave('role', fn ($q) => $q->where('access_level', 'full'))
+        $query = User::with(['roles', 'agency', 'shift'])
+            ->whereDoesntHave('roles', fn ($q) => $q->where('access_level', 'full'))
             ->where('id', '!=', $request->user()?->id);
 
-        $this->applyScope($query, $request->user()?->role);
+        $this->applyScope($query, $request->user());
 
         return response()->json($this->attachCompanies($query->get()));
     }
@@ -60,23 +60,25 @@ class UserController extends Controller
      * and allowed_zones (matched against dispatch_zones). Full access (or
      * no role restriction configured, i.e. empty lists) sees everyone.
      */
-    private function applyScope($query, ?\App\Models\Role $role): void
+    private function applyScope($query, ?User $actingUser): void
     {
-        if (!$role || $role->access_level !== 'restricted') {
+        if (!$actingUser || $actingUser->effectiveAccessLevel() !== 'restricted') {
             return;
         }
 
-        if (!empty($role->allowed_companies)) {
-            $query->where(function ($q) use ($role) {
-                foreach ($role->allowed_companies as $companyId) {
+        $companies = $actingUser->allowedCompaniesScope();
+        if ($companies) {
+            $query->where(function ($q) use ($companies) {
+                foreach ($companies as $companyId) {
                     $q->orWhereJsonContains('company_ids', (string) $companyId);
                 }
             });
         }
 
-        if (!empty($role->allowed_zones)) {
-            $query->where(function ($q) use ($role) {
-                foreach ($role->allowed_zones as $zone) {
+        $zones = $actingUser->allowedZonesScope();
+        if ($zones) {
+            $query->where(function ($q) use ($zones) {
+                foreach ($zones as $zone) {
                     $q->orWhereJsonContains('dispatch_zones', $zone);
                 }
             });
@@ -84,25 +86,23 @@ class UserController extends Controller
     }
 
     /**
-     * Whether the acting role is allowed to view/edit/delete this specific
+     * Whether the acting user is allowed to view/edit/delete this specific
      * employee — guards direct-ID access from bypassing the same
      * company/zone scope enforced on the list endpoint.
      */
-    private function inScope(User $user, ?\App\Models\Role $role): bool
+    private function inScope(User $user, ?User $actingUser): bool
     {
-        if (!$role || $role->access_level !== 'restricted') {
+        if (!$actingUser || $actingUser->effectiveAccessLevel() !== 'restricted') {
             return true;
         }
 
-        if (!$role->allowsAnyCompany($user->company_ids ?? [])) {
+        if (!$actingUser->allowsAnyCompany($user->company_ids ?? [])) {
             return false;
         }
 
-        if (!empty($role->allowed_zones)) {
-            $dispatchZones = $user->dispatch_zones ?? [];
-            if (empty(array_intersect($role->allowed_zones, $dispatchZones))) {
-                return false;
-            }
+        $zones = $actingUser->allowedZonesScope();
+        if ($zones && empty(array_intersect($zones, $user->dispatch_zones ?? []))) {
+            return false;
         }
 
         return true;
@@ -111,16 +111,16 @@ class UserController extends Controller
     /**
      * Only a full-access actor may grant another user a full-access role —
      * otherwise a restricted role with `users.update` permission on itself
-     * could hand itself (or anyone else) Super Admin by setting role_id.
+     * could hand itself (or anyone else) Super Admin by setting role_ids.
      */
-    private function assertRoleAssignmentAllowed(?Role $actingRole, ?int $newRoleId): void
+    private function assertRoleAssignmentAllowed(User $actingUser, array $newRoleIds): void
     {
-        if ($newRoleId === null || $actingRole?->access_level === 'full') {
+        if (empty($newRoleIds) || $actingUser->hasFullAccess()) {
             return;
         }
 
-        $targetRole = Role::find($newRoleId);
-        if ($targetRole && $targetRole->access_level === 'full') {
+        $hasFullTarget = Role::whereIn('id', $newRoleIds)->where('access_level', 'full')->exists();
+        if ($hasFullTarget) {
             abort(403, 'Vous ne pouvez pas assigner un rôle à accès complet.');
         }
     }
@@ -165,51 +165,58 @@ class UserController extends Controller
             'start_date' => 'nullable|date',
             'company_ids' => 'nullable|array',
             'company_ids.*' => 'exists:companies,id',
-            'role_id' => 'nullable|exists:roles,id',
+            'role_ids' => 'nullable|array',
+            'role_ids.*' => 'exists:roles,id',
             'username' => 'nullable|string|max:191|unique:users',
             'password' => 'nullable|string|min:6',
         ]);
 
-        $actingRole = $request->user()?->role;
-        if ($actingRole && $actingRole->access_level === 'restricted') {
-            if (!$actingRole->allowsAllCompanies($validated['company_ids'] ?? [])) {
+        $actingUser = $request->user();
+        if ($actingUser->effectiveAccessLevel() === 'restricted') {
+            if (!$actingUser->allowsAllCompanies($validated['company_ids'] ?? [])) {
                 abort(403, 'Vous ne pouvez pas assigner un employé à une compagnie en dehors de vos compagnies autorisées.');
             }
             $zones = $validated['dispatch_zones'] ?? [];
-            if (!empty($actingRole->allowed_zones) && empty(array_intersect($actingRole->allowed_zones, $zones))) {
+            $allowedZones = $actingUser->allowedZonesScope();
+            if ($allowedZones && empty(array_intersect($allowedZones, $zones))) {
                 abort(403, 'Vous ne pouvez pas assigner des zones de dispatch en dehors de vos zones autorisées.');
             }
         }
-        $this->assertRoleAssignmentAllowed($actingRole, $validated['role_id'] ?? null);
+        $roleIds = $validated['role_ids'] ?? [];
+        $this->assertRoleAssignmentAllowed($actingUser, $roleIds);
         $this->assertShiftMatchesAssignment($validated['shift_id'] ?? null, $validated['company_ids'] ?? [], $validated['agency_id'] ?? null);
 
         if (!empty($validated['password'])) {
             $validated['password'] = Hash::make($validated['password']);
         }
+        unset($validated['role_ids']);
 
         $user = User::create($validated);
-        return response()->json($this->attachCompaniesToOne($user->load(['role', 'agency', 'shift'])), 201);
+        $user->roles()->sync($roleIds);
+        return response()->json($this->attachCompaniesToOne($user->load(['roles', 'agency', 'shift'])), 201);
     }
 
     public function show(Request $request, User $user)
     {
-        if (!$this->inScope($user, $request->user()?->role)) {
+        if (!$this->inScope($user, $request->user())) {
             abort(403, 'Cet employé est en dehors des compagnies/zones autorisées pour votre rôle.');
         }
 
-        return response()->json($this->attachCompaniesToOne($user->load(['role', 'agency', 'shift'])));
+        return response()->json($this->attachCompaniesToOne($user->load(['roles', 'agency', 'shift'])));
     }
 
     public function update(Request $request, User $user)
     {
-        if (!$this->inScope($user, $request->user()?->role)) {
+        $actingUser = $request->user();
+
+        if (!$this->inScope($user, $actingUser)) {
             abort(403, 'Cet employé est en dehors des compagnies/zones autorisées pour votre rôle.');
         }
 
         // A restricted role editing its own employee row is the same
         // self-escalation path already blocked on the Roles screen — it
         // could hand itself a different company/role/shift.
-        if ($request->user()?->id === $user->id && $request->user()?->role?->access_level !== 'full') {
+        if ($actingUser?->id === $user->id && !$actingUser->hasFullAccess()) {
             abort(403, 'Vous ne pouvez pas modifier votre propre compte.');
         }
 
@@ -225,24 +232,25 @@ class UserController extends Controller
             'start_date' => 'nullable|date',
             'company_ids' => 'nullable|array',
             'company_ids.*' => 'exists:companies,id',
-            'role_id' => 'nullable|exists:roles,id',
+            'role_ids' => 'nullable|array',
+            'role_ids.*' => 'exists:roles,id',
             'username' => 'nullable|string|max:191|unique:users,username,'.$user->id,
             'password' => 'nullable|string|min:6',
         ]);
 
-        $actingRole = $request->user()?->role;
-        if ($actingRole && $actingRole->access_level === 'restricted') {
+        if ($actingUser->effectiveAccessLevel() === 'restricted') {
             $newCompanyIds = array_key_exists('company_ids', $validated) ? $validated['company_ids'] : ($user->company_ids ?? []);
-            if (!$actingRole->allowsAllCompanies($newCompanyIds)) {
+            if (!$actingUser->allowsAllCompanies($newCompanyIds)) {
                 abort(403, 'Vous ne pouvez pas déplacer un employé vers une compagnie en dehors de vos compagnies autorisées.');
             }
             $newZones = array_key_exists('dispatch_zones', $validated) ? $validated['dispatch_zones'] : ($user->dispatch_zones ?? []);
-            if (!empty($actingRole->allowed_zones) && empty(array_intersect($actingRole->allowed_zones, $newZones ?? []))) {
+            $allowedZones = $actingUser->allowedZonesScope();
+            if ($allowedZones && empty(array_intersect($allowedZones, $newZones ?? []))) {
                 abort(403, 'Vous ne pouvez pas assigner des zones de dispatch en dehors de vos zones autorisées.');
             }
         }
-        if (array_key_exists('role_id', $validated)) {
-            $this->assertRoleAssignmentAllowed($actingRole, $validated['role_id']);
+        if (array_key_exists('role_ids', $validated)) {
+            $this->assertRoleAssignmentAllowed($actingUser, $validated['role_ids'] ?? []);
         }
         if (array_key_exists('shift_id', $validated)) {
             $finalCompanyIds = array_key_exists('company_ids', $validated) ? $validated['company_ids'] : ($user->company_ids ?? []);
@@ -256,13 +264,20 @@ class UserController extends Controller
             unset($validated['password']);
         }
 
+        $roleIdsProvided = array_key_exists('role_ids', $validated);
+        $roleIds = $validated['role_ids'] ?? [];
+        unset($validated['role_ids']);
+
         $user->update($validated);
-        return response()->json($this->attachCompaniesToOne($user->load(['role', 'agency', 'shift'])));
+        if ($roleIdsProvided) {
+            $user->roles()->sync($roleIds);
+        }
+        return response()->json($this->attachCompaniesToOne($user->load(['roles', 'agency', 'shift'])));
     }
 
     public function destroy(Request $request, User $user)
     {
-        if (!$this->inScope($user, $request->user()?->role)) {
+        if (!$this->inScope($user, $request->user())) {
             abort(403, 'Cet employé est en dehors des compagnies/zones autorisées pour votre rôle.');
         }
 

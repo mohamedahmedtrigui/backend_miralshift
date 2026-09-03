@@ -104,12 +104,11 @@ class DatabaseSeeder extends Seeder
         ]);
 
         // 4. Create Users
-        User::create([
+        $admin = User::create([
             'first_name' => 'Admin',
             'last_name' => 'System',
             'username' => 'admin',
             'password' => Hash::make('password'),
-            'role_id' => $adminRole->id,
             'company_ids' => [(string) $company1->id],
             'agency_id' => $tunisAgency->id,
             'dispatch_zones' => ['Tunis'],
@@ -117,13 +116,13 @@ class DatabaseSeeder extends Seeder
             'shift_id' => $morningShift->id,
             'start_date' => '2023-01-01'
         ]);
+        $admin->roles()->attach($adminRole->id);
 
-        User::create([
+        $sami = User::create([
             'first_name' => 'Sami',
             'last_name' => 'Trabelsi',
             'username' => 'sami',
             'password' => Hash::make('password'),
-            'role_id' => $dispatcherRole->id,
             'company_ids' => [(string) $company2->id],
             'agency_id' => $sousseAgency->id,
             'dispatch_zones' => ['Sousse'],
@@ -131,6 +130,7 @@ class DatabaseSeeder extends Seeder
             'shift_id' => $afternoonShift->id,
             'start_date' => '2023-06-15'
         ]);
+        $sami->roles()->attach($dispatcherRole->id);
 
         User::create([
             'first_name' => 'Fatma',

@@ -12,8 +12,8 @@ class CalendarController extends Controller
      */
     public function index(Request $request)
     {
-        $role = $request->user()?->role;
-        if (!$role || !$role->canAccessInterface('calendar')) {
+        $user = $request->user();
+        if (!$user?->canAccessInterface('calendar')) {
             abort(403, 'Votre rôle n\'a pas accès au calendrier.');
         }
 
@@ -23,22 +23,24 @@ class CalendarController extends Controller
         // Since the day_off is fixed, we just return the users list.
         // Super Admins are system/admin accounts, not dispatchers with real
         // shifts — exclude them from the schedule.
-        $query = User::with('role', 'agency', 'shift')
-            ->whereDoesntHave('role', fn ($q) => $q->where('access_level', 'full'));
+        $query = User::with('roles', 'agency', 'shift')
+            ->whereDoesntHave('roles', fn ($q) => $q->where('access_level', 'full'));
 
         // A "restricted" role only sees the schedule for its allowed
         // companies/zones — same scope as the Employees list.
-        if ($role->access_level === 'restricted') {
-            if (!empty($role->allowed_companies)) {
-                $query->where(function ($q) use ($role) {
-                    foreach ($role->allowed_companies as $companyId) {
+        if ($user->effectiveAccessLevel() === 'restricted') {
+            $companies = $user->allowedCompaniesScope();
+            if ($companies) {
+                $query->where(function ($q) use ($companies) {
+                    foreach ($companies as $companyId) {
                         $q->orWhereJsonContains('company_ids', (string) $companyId);
                     }
                 });
             }
-            if (!empty($role->allowed_zones)) {
-                $query->where(function ($q) use ($role) {
-                    foreach ($role->allowed_zones as $zone) {
+            $zones = $user->allowedZonesScope();
+            if ($zones) {
+                $query->where(function ($q) use ($zones) {
+                    foreach ($zones as $zone) {
                         $q->orWhereJsonContains('dispatch_zones', $zone);
                     }
                 });
