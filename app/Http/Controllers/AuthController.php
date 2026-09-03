@@ -22,13 +22,13 @@ class AuthController extends Controller
             return response()->json(['message' => 'Identifiants invalides'], 401);
         }
 
-        if (!$user->role || $user->role->access_level === 'none') {
+        if ($user->isBlocked()) {
             return response()->json(['message' => 'Accès refusé'], 403);
         }
 
         $token = $user->createToken('auth_token')->plainTextToken;
 
-        $user->load('role');
+        $user->load('roles');
         $companiesById = Company::all()->keyBy('id');
         $user->companies = collect($user->company_ids ?? [])
             ->map(fn ($id) => $companiesById->get((int) $id))

@@ -58,9 +58,9 @@ class CheckRolePermission
             return $next($request);
         }
 
-        $role = $request->user()?->role;
+        $user = $request->user();
 
-        if (!$role) {
+        if (!$user?->hasAnyRole()) {
             return response()->json([
                 'message' => 'Votre compte n\'a aucun rôle assigné et ne peut pas effectuer cette action.',
             ], 403);
@@ -69,7 +69,7 @@ class CheckRolePermission
         $resource = $this->resources[$routeResource];
         $action = $this->actions[$routeAction];
 
-        if (!$role->canDo($resource, $action)) {
+        if (!$user->canDo($resource, $action)) {
             $actionLabel = $this->actionLabels[$action] ?? $action;
             $resourceLabel = $this->resourceLabels[$resource] ?? $resource;
             return response()->json([

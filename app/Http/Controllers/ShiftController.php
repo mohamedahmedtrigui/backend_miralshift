@@ -4,7 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Models\Shift;
-use App\Models\Role;
+use App\Models\User;
 
 class ShiftController extends Controller
 {
@@ -12,7 +12,7 @@ class ShiftController extends Controller
     {
         $query = Shift::with(['agency'])->withCount('users')->orderBy('name');
 
-        $this->applyScope($query, $request->user()?->role);
+        $this->applyScope($query, $request->user());
 
         return response()->json($this->attachCompanies($query->get()));
     }
@@ -50,32 +50,34 @@ class ShiftController extends Controller
      * Same scoping as UserController — a restricted role only sees shifts
      * within its allowed_companies/allowed_agencies.
      */
-    private function applyScope($query, ?Role $role): void
+    private function applyScope($query, ?User $actingUser): void
     {
-        if (!$role || $role->access_level !== 'restricted') {
+        if (!$actingUser || $actingUser->effectiveAccessLevel() !== 'restricted') {
             return;
         }
 
-        if (!empty($role->allowed_companies)) {
-            $query->where(function ($q) use ($role) {
-                foreach ($role->allowed_companies as $companyId) {
+        $companies = $actingUser->allowedCompaniesScope();
+        if ($companies) {
+            $query->where(function ($q) use ($companies) {
+                foreach ($companies as $companyId) {
                     $q->orWhereJsonContains('company_ids', (string) $companyId);
                 }
             });
         }
 
-        if (!empty($role->allowed_agencies)) {
-            $query->whereIn('agency_id', $role->allowed_agencies);
+        $agencies = $actingUser->allowedAgenciesScope();
+        if ($agencies) {
+            $query->whereIn('agency_id', $agencies);
         }
     }
 
-    private function inScope(Shift $shift, ?Role $role): bool
+    private function inScope(Shift $shift, ?User $actingUser): bool
     {
-        if (!$role || $role->access_level !== 'restricted') {
+        if (!$actingUser || $actingUser->effectiveAccessLevel() !== 'restricted') {
             return true;
         }
 
-        return $role->allowsAnyCompany($shift->company_ids ?? []) && $role->allowsAgency($shift->agency_id);
+        return $actingUser->allowsAnyCompany($shift->company_ids ?? []) && $actingUser->allowsAgency($shift->agency_id);
     }
 
     public function store(Request $request)
@@ -90,9 +92,9 @@ class ShiftController extends Controller
             'color' => 'nullable|string|max:7',
         ]);
 
-        $actingRole = $request->user()?->role;
-        if ($actingRole && $actingRole->access_level === 'restricted') {
-            if (!$actingRole->allowsAllCompanies($validated['company_ids']) || !$actingRole->allowsAgency($validated['agency_id'])) {
+        $actingUser = $request->user();
+        if ($actingUser->effectiveAccessLevel() === 'restricted') {
+            if (!$actingUser->allowsAllCompanies($validated['company_ids']) || !$actingUser->allowsAgency($validated['agency_id'])) {
                 abort(403, 'Vous ne pouvez pas créer un shift en dehors de vos compagnies/agences autorisées.');
             }
         }
@@ -103,7 +105,7 @@ class ShiftController extends Controller
 
     public function show(Request $request, Shift $shift)
     {
-        if (!$this->inScope($shift, $request->user()?->role)) {
+        if (!$this->inScope($shift, $request->user())) {
             abort(403, 'Ce shift est en dehors des compagnies/agences autorisées pour votre rôle.');
         }
 
@@ -112,7 +114,7 @@ class ShiftController extends Controller
 
     public function update(Request $request, Shift $shift)
     {
-        if (!$this->inScope($shift, $request->user()?->role)) {
+        if (!$this->inScope($shift, $request->user())) {
             abort(403, 'Ce shift est en dehors des compagnies/agences autorisées pour votre rôle.');
         }
 
@@ -126,11 +128,11 @@ class ShiftController extends Controller
             'color' => 'nullable|string|max:7',
         ]);
 
-        $actingRole = $request->user()?->role;
-        if ($actingRole && $actingRole->access_level === 'restricted') {
+        $actingUser = $request->user();
+        if ($actingUser->effectiveAccessLevel() === 'restricted') {
             $newCompanyIds = $validated['company_ids'] ?? ($shift->company_ids ?? []);
             $newAgencyId = $validated['agency_id'] ?? $shift->agency_id;
-            if (!$actingRole->allowsAllCompanies($newCompanyIds) || !$actingRole->allowsAgency($newAgencyId)) {
+            if (!$actingUser->allowsAllCompanies($newCompanyIds) || !$actingUser->allowsAgency($newAgencyId)) {
                 abort(403, 'Vous ne pouvez pas déplacer ce shift vers une compagnie/agence en dehors de vos autorisations.');
             }
         }
@@ -141,7 +143,7 @@ class ShiftController extends Controller
 
     public function destroy(Request $request, Shift $shift)
     {
-        if (!$this->inScope($shift, $request->user()?->role)) {
+        if (!$this->inScope($shift, $request->user())) {
             abort(403, 'Ce shift est en dehors des compagnies/agences autorisées pour votre rôle.');
         }
 

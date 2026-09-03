@@ -20,7 +20,7 @@ class AgencyController extends Controller
      */
     private function assertFullAccess(Request $request): void
     {
-        if ($request->user()?->role?->access_level !== 'full') {
+        if (!$request->user()?->hasFullAccess()) {
             abort(403, 'Seul un accès complet peut créer, modifier ou supprimer une agence.');
         }
     }
