@@ -21,10 +21,10 @@ class CalendarController extends Controller
         // The frontend will filter them by day_off and shift times.
         // If we want the backend to format it per day:
         // Since the day_off is fixed, we just return the users list.
-        // Super Admins are system/admin accounts, not dispatchers with real
-        // shifts — exclude them from the schedule.
+        // Accounts with any role are staff/admin accounts, not dispatchers
+        // with real shifts — exclude them from the schedule.
         $query = User::with('roles', 'agency', 'shift')
-            ->whereDoesntHave('roles', fn ($q) => $q->where('access_level', 'full'));
+            ->whereDoesntHave('roles');
 
         // A "restricted" role only sees the schedule for its allowed
         // companies/zones — same scope as the Employees list.

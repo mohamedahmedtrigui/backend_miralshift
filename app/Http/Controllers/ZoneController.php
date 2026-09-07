@@ -9,9 +9,16 @@ use App\Models\Role;
 
 class ZoneController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
-        return response()->json(Zone::orderBy('name')->get());
+        $query = Zone::orderBy('name');
+
+        $scope = $request->user()?->allowedZonesScope();
+        if ($scope !== null) {
+            $query->whereIn('name', $scope);
+        }
+
+        return response()->json($query->get());
     }
 
     /**

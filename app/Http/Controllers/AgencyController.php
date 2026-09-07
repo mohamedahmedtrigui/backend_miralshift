@@ -7,9 +7,16 @@ use App\Models\Agency;
 
 class AgencyController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
-        return response()->json(Agency::withCount('users')->orderBy('name')->get());
+        $query = Agency::withCount('users')->orderBy('name');
+
+        $scope = $request->user()?->allowedAgenciesScope();
+        if ($scope !== null) {
+            $query->whereIn('id', $scope);
+        }
+
+        return response()->json($query->get());
     }
 
     /**
